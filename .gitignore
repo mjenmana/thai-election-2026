@@ -1,6 +1,8 @@
+data/
 data/raw/
 data/logs/
 .venv/
 __pycache__/
 *.pyc
 .DS_Store
+*.log
