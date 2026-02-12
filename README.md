@@ -1,238 +1,211 @@
-# 2026 Thai Election
+# Thai Election 2026: ECT Google Drive Mirror + OCR Pipeline
 
-Tools to:
+This repository helps:
 
-- selectively sync ECT province Google Drive folders (rclone)
-- snapshot/index remote folder contents (to track what ECT has uploaded)
-- run Typhoon OCR pipeline on downloaded PDFs
+1. **Mirror the Election Commission of Thailand (ECT) Google Drive folders** (keeping their original structure), while letting you **select only specific provinces** to download.
+2. **Digitise PDF vote-result forms** into machine-readable text using the **Typhoon OCR** API.
 
-This repository is designed to scale to ~100,000 polling station PDFs while remaining restart-safe and collaboration-friendly.
-
----
-
-## Repository Structure
-
-```
-configs/
-scripts/
-data/
-  raw/                         # downloaded PDFs (NOT committed)
-    <province>/...
-  processed/
-    ocr_markdown/              # OCR outputs (NOT committed)
-      <province>/...
-  manifests/
-    ocr_manifest.jsonl         # OCR progress tracking (NOT committed)
-requirements.txt
-README.md
-```
-
-### Design Principles
-
-- `data/raw/` is immutable
-- `data/processed/` mirrors raw structure exactly
-- Province folder is always preserved at root
-- OCR can be stopped and resumed safely
-- Already-processed PDFs are skipped automatically
-- Raw PDFs and OCR outputs are never committed to Git
+The project is designed so that collaborators can “claim” provinces, run the pipeline locally, and share back outputs.
 
 ---
 
-## Setup (macOS)
+## What’s in this repo
 
-### 1. Clone the repository
+### Key folders
 
-```bash
-git clone https://github.com/mjenmana/thai-election-2026.git
-cd thai-election-2026
-```
+- `configs/`
+  - `province_links.csv` — mapping of province → Google Drive folder link (or folder ID)
+  - `provinces.txt` — list of provinces you want to operate on (one per line, Thai spelling must match the CSV)
+  - `ocr.yaml` — OCR configuration (model, rate limits, etc.)
+- `scripts/`
+  - `sync_selected_from_csv.sh` — download selected provinces (preserve structure)
+  - `index_remote_snapshot.sh` — build a remote snapshot index (all provinces)
+  - `index_one_province.py` — helper used by snapshot indexer
+  - `make_remote_index_summary.py` — generates readable summaries from the snapshot status file
+  - `run_typhoon_ocr.py` — OCR runner (uses Typhoon API)
+- `data/remote_index/published/` (**committed, public**)
+  - `summary.md` — **human-readable latest snapshot** (start here)
+  - `summary.csv` — same info in CSV form
+  - `status.jsonl` — per-province status rollup (JSONL)
+  - `items.jsonl.gz` — full remote listing (compressed JSONL)
+  - `README.md` — how to use the snapshot files
+- `data/raw/` (NOT committed) — downloaded Google Drive files (your local mirror)
+- `data/ocr/` (NOT committed by default) — OCR outputs (your local)
 
-### 2. Create and activate virtual environment
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
----
-
-## Typhoon API Setup
-
-You must obtain your own Typhoon API key.
-
-Set environment variables:
-
-```bash
-export TYPHOON_BASE_URL="https://api.opentyphoon.ai/v1"
-export TYPHOON_API_KEY="YOUR_API_KEY"
-```
-
-To make them persistent:
-
-```bash
-echo 'export TYPHOON_BASE_URL="https://api.opentyphoon.ai/v1"' >> ~/.zshrc
-echo 'export TYPHOON_API_KEY="YOUR_API_KEY"' >> ~/.zshrc
-source ~/.zshrc
-```
+> The repo intentionally does **not** commit the raw mirrored PDFs (too large).  
+> Only the **remote index snapshot** is committed so everyone can see what ECT has uploaded so far.
 
 ---
 
-## Syncing Raw Data
+## Quickstart (macOS)
 
-Raw PDFs must be downloaded into:
+### 0) Prerequisites
 
-```
-data/raw/<province>/...
-```
+Install these once:
 
-The province folder must always be the root directory.
+- Git
+- Python 3.10+ (recommended via `pyenv` or system python)
+- `rclone` (for Google Drive mirroring)
 
-Raw files are never committed to Git.
+Homebrew:
+brew install rclone
 
----
+### 1) Clone the repo
 
-## Snapshot Remote (What Exists on ECT Drive Now)
+    git clone https://github.com/mjenmana/thai-election-2026.git
+    cd thai-election-2026
 
-```bash
-bash scripts/index_remote_snapshot.sh ect_drive
-```
+### 2) Create a Python virtual environment
 
-This generates a JSONL snapshot of the remote structure so we can track new uploads over time.
-
----
-
-## Sync Selected Provinces
-
-```bash
-bash scripts/sync_selected_from_csv.sh ect_drive
-```
-
-Province links must be listed in:
-
-```
-configs/province_links.csv
-```
-
-Selected provinces must be listed in:
-
-```
-configs/provinces.txt
-```
+    python -m venv .venv
+    source .venv/bin/activate
+    pip install -U pip
+    pip install -r requirements.txt
 
 ---
 
-## Running OCR (Interactive Mode)
+## Latest ECT upload status (remote snapshot)
 
-Run:
+Before downloading anything, check what exists on the ECT drives **right now**:
 
-```bash
-./scripts/ocr.sh
-```
+- Open: `data/remote_index/published/summary.md`
 
-You will be prompted for:
+That file shows, for each province:
 
-- Model name
-- Number of parallel workers
-- Maximum runtime in seconds (chunk duration)
-- Optional maximum number of PDFs
+- number of folders
+- number of files
+- number of PDFs
+- last modified timestamp
+
+If you want to inspect the full listing:
+
+    gunzip -c data/remote_index/published/items.jsonl.gz | head
+
+To count total PDFs in the entire country snapshot:
+
+    gunzip -c data/remote_index/published/items.jsonl.gz | grep -i '\.pdf"' | wc -l
+
+---
+
+## Building a new remote snapshot (maintainers)
+
+If ECT uploads new files and you want to refresh the public snapshot:
+
+    bash scripts/index_remote_snapshot.sh ect_drive
+
+Then publish the latest snapshot:
+
+    mkdir -p data/remote_index/published
+    LATEST_STATUS=$(ls -1t data/remote_index/status_*.jsonl | head -n 1)
+    LATEST_ITEMS=$(ls -1t data/remote_index/items_*.jsonl  | head -n 1)
+
+    cp "$LATEST_STATUS" data/remote_index/published/status.jsonl
+    gzip -c "$LATEST_ITEMS" > data/remote_index/published/items.jsonl.gz
+
+    python scripts/make_remote_index_summary.py
+
+Commit and push:
+
+    git add data/remote_index/published/
+    git commit -m "Update remote snapshot"
+    git push
+
+---
+
+## Download selected provinces
+
+Edit `configs/provinces.txt` and add provinces (Thai names must match CSV exactly), for example:
+
+    ลำปาง
+    เชียงใหม่
+
+Then run:
+
+    bash scripts/sync_selected_from_csv.sh ect_drive
+
+Files will be downloaded into:
+
+    data/raw/<จังหวัด>/...
+
+The original ECT folder structure is preserved.
+
+---
+
+## OCR pipeline (Typhoon API)
+
+### 1) Set API credentials
+
+Export environment variables:
+
+    export TYPHOON_BASE_URL="https://api.opentyphoon.ai/v1"
+    export TYPHOON_API_KEY="YOUR_API_KEY"
+
+You can add these to your `~/.zshrc` if you prefer.
+
+### 2) Run OCR
+
+Activate environment:
+
+    source .venv/bin/activate
+
+Run OCR:
+
+    python scripts/run_typhoon_ocr.py
 
 The script:
 
-- Runs in chunks (safe to interrupt)
-- Resumes automatically
-- Skips already processed PDFs (fingerprint-based)
-- Preserves folder structure
-- Writes progress to `data/manifests/ocr_manifest.jsonl`
+- walks through `data/raw/`
+- mirrors folder structure into `data/ocr/`
+- processes PDFs page by page
+- writes structured outputs (JSON / CSV depending on configuration)
+
+You can configure:
+
+- model version
+- rate limits
+- chunk size
+- parallel workers
+
+via `configs/ocr.yaml`.
 
 ---
 
-## Resuming OCR
+## Collaboration model
 
-To resume processing:
+1. Check `summary.md` to see which provinces have uploaded PDFs.
+2. Agree on which province you will process.
+3. Add province to your local `configs/provinces.txt`.
+4. Run sync.
+5. Run OCR.
+6. Share back machine-readable results.
 
-```bash
-./scripts/ocr.sh
-```
+The remote snapshot ensures everyone knows:
 
-Only new or modified PDFs will be processed.
-
-Fingerprinting uses file size + modification time.
-
----
-
-## Recommended Settings
-
-For stable execution:
-
-- Workers: 2–3
-- Chunk duration: 3600–7200 seconds
-- Model: `typhoon-ocr`
-
-If API errors occur, reduce workers to 1–2.
-
----
-
-## Manifest Tracking
-
-Progress is written to:
-
-```
-data/manifests/ocr_manifest.jsonl
-```
-
-Each entry records:
-
-- relative file path
-- fingerprint
-- status (`ok`, `skipped`, `error`)
-- processing time
-
-This enables:
-
-- Safe restarts
-- Distributed work
-- Verification of completion
-
----
-
-## Collaboration Workflow
-
-Each collaborator may:
-
-1. Sync one or more provinces into `data/raw/<province>/`
-2. Run OCR locally
-3. Share processed outputs separately (not via Git)
-
-Because province is preserved in the output path, there is no overlap across contributors.
-
----
-
-## Files Ignored by Git
-
-The following are excluded:
-
-```
-data/
-.venv/
-__pycache__/
-*.pyc
-.DS_Store
-```
-
-This keeps the repository lightweight and reproducible.
+- what ECT has uploaded
+- which provinces are complete
+- whether new files have appeared
 
 ---
 
 ## Versioning
 
-Stable pipeline versions may be tagged:
+Stable milestones are tagged (e.g., `v0.1`).
 
-```bash
-git tag v0.1-ocr-pipeline
-git push origin v0.1-ocr-pipeline
-```
+Check tags:
+
+    git tag
+
+See details:
+
+    git show v0.1
 
 ---
 
-This repository provides a scalable, restart-safe, province-isolated OCR workflow for the 2026 Thai Election polling station results.
+## Philosophy
+
+- Preserve raw structure exactly.
+- Separate raw data, OCR output, and published metadata.
+- Keep repository reproducible.
+- Make collaboration modular and scalable.
+
+This project is designed to handle ~100,000 polling stations across 77 provinces in a structured, reproducible way.
