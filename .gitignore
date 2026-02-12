@@ -1,8 +1,12 @@
-data/
-data/raw/
-data/logs/
+# ignore all data by default
+data/*
+# but keep the published remote index
+!data/remote_index/
+data/remote_index/*
+!data/remote_index/published/
+!data/remote_index/published/**
+# other usual ignores
 .venv/
 __pycache__/
 *.pyc
 .DS_Store
-*.log
