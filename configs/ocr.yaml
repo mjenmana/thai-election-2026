@@ -1,0 +1,6 @@
+typhoon:
+  base_url_env: "TYPHOON_BASE_URL"
+  api_key_env: "TYPHOON_API_KEY"
+  model_env: "TYPHOON_MODEL"
+pipeline:
+  overwrite: false
