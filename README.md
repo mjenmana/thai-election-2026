@@ -1,5 +1,7 @@
 # Thai Election 2026 — ECT Google Drive Mirror + OCR Pipeline
 
+This repo is now not updated. Continued effort here: **[Klaijan/th-election-2026](https://github.com/Klaijan/th-election-2026)**
+
 This repository provides a reproducible workflow to:
 
 1. Mirror ECT province Google Drive folders locally (PDF scans), preserving folder structure
